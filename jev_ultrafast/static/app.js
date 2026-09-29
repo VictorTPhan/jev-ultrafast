@@ -92,8 +92,9 @@ function render() {
     return;
   }
   $("empty").hidden = true;
-  $("screenshot").hidden = false;
-  $("screenshot").src = `data:image/jpeg;base64,${page.screenshot}`;
+  // The preview is best-effort: Chrome does not paint background tabs, so a frame can be missing.
+  $("screenshot").hidden = !page.screenshot;
+  if (page.screenshot) $("screenshot").src = `data:image/jpeg;base64,${page.screenshot}`;
   $("url").textContent = page.url;
   $("page-title").textContent = page.title;
   $("action-count").textContent = `${state.elements.length} elements`;

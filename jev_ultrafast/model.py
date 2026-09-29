@@ -166,6 +166,9 @@ def field_text(context):
     reasoning = {"thinking": {"type": "disabled"}} if "api.deepseek.com/" in base else {"reasoning": {"effort": "low"}}
     if os.environ.get("TEXT_MODEL_REASONING") == "none":
         reasoning = {"reasoning": {"enabled": False}}
+    # Reasoning fields are provider extensions; plain OpenAI-compatible APIs reject them with HTTP 400.
+    if "api.deepseek.com/" not in base and "openrouter.ai/" not in base:
+        reasoning = {}
     started = time.perf_counter()
     result = post_json(
         base + "/chat/completions",

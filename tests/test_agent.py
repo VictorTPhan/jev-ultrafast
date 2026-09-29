@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from jev_ultrafast import agent as loop
+from jev_ultrafast import browser as browser_module
 from jev_ultrafast import model
 from jev_ultrafast.browser import StalePage, browser_operation, fingerprint
 
@@ -149,6 +150,24 @@ def test_quoted_task_text_still_uses_the_llm(monkeypatch):
     assert post.call_count == 1
     sent = json.loads(post.call_args.args[2]["messages"][1]["content"])
     assert sent["goal"] == 'Fly from "Zurich" to London'
+
+
+@pytest.mark.parametrize(
+    ("base", "expected"),
+    [
+        ("https://openrouter.ai/api/v1", {"reasoning": {"enabled": False}}),
+        ("https://api.openai.com/v1", {}),
+    ],
+)
+def test_reasoning_fields_only_go_to_providers_that_accept_them(monkeypatch, base, expected):
+    monkeypatch.setenv("TEXT_MODEL_API_KEY", "test")
+    monkeypatch.setenv("TEXT_MODEL_BASE_URL", base)
+    monkeypatch.setenv("TEXT_MODEL_REASONING", "none")
+    post = Mock(return_value={"choices": [{"message": {"content": '{"text":"Zurich"}'}}]})
+    monkeypatch.setattr(model, "post_json", post)
+    model.field_text({"goal": 'Enter "Zurich"'})
+    body = post.call_args.args[2]
+    assert {k: body[k] for k in ("reasoning", "thinking") if k in body} == expected
 
 
 def test_missing_text_credential_stops_before_guessing(monkeypatch):
@@ -318,3 +337,26 @@ def test_navigation_during_prediction_reobserves_without_action(runner):
     assert runner.state["status"] == "ready"
     assert runner.state["decision"] is None
     runner.state["browser"].act.assert_not_called()
+
+
+def test_closing_a_tab_the_user_already_closed_is_not_an_error(monkeypatch):
+    error = RuntimeError({"code": -32602, "message": "No target with given id found"})
+    monkeypatch.setattr(browser_module, "cdp", Mock(side_effect=error))
+    b = browser_module.Browser.__new__(browser_module.Browser)
+    b.target = "gone"
+    b.close()
+    assert b.target is None
+
+
+def test_a_stalled_screenshot_skips_the_preview_instead_of_failing(monkeypatch):
+    p = page()
+
+    def cdp(method, **_params):
+        if method == "Page.captureScreenshot":
+            raise TimeoutError("Page.captureScreenshot timed out after 2s waiting for the daemon")
+        return {"result": {"value": deepcopy(p)}}
+
+    monkeypatch.setattr(browser_module, "cdp", cdp)
+    actual = browser_operation({"operation": "observe", "session": "test", "screenshot": True})
+    assert actual["screenshot"] is None
+    assert actual["fingerprint"] == fingerprint(p)

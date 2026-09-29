@@ -10,7 +10,7 @@ from browser_harness.admin import ensure_daemon
 from browser_harness.helpers import cdp
 
 # Atomically read visible content and controls, preserving actual DOM node identity.
-READ_STATE = Path(__file__).with_name("snapshot.js").read_text()
+READ_STATE = Path(__file__).with_name("snapshot.js").read_text(encoding="utf-8")
 MARKER = f"(() => {{ const state={READ_STATE}; return state?.marker ?? null; }})()"
 
 class StalePage(ValueError):
@@ -20,7 +20,10 @@ class StalePage(ValueError):
 class Browser:
     def __init__(self, url):
         ensure_daemon()
-        self.target = cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
+        # Own window: Chrome only paints a window's visible tab, and the inspector needs live screenshots.
+        self.target = cdp(
+            "Target.createTarget", url="about:blank", newWindow=True, background=True, width=1120, height=900
+        )["targetId"]
         self.session = cdp("Target.attachToTarget", targetId=self.target, flatten=True)["sessionId"]
         self.call("Emulation.setDeviceMetricsOverride", width=1120, height=780, deviceScaleFactor=1, mobile=False)
         # Keep rAF/menus rendering in an owned background tab, without activating the user's Chrome tab.
@@ -107,9 +110,14 @@ class Browser:
         return result
 
     def close(self):
-        if self.target:
-            cdp("Target.closeTarget", targetId=self.target)
-            self.target = None
+        target, self.target = self.target, None
+        if target:
+            try:
+                cdp("Target.closeTarget", targetId=target)
+            except RuntimeError as error:
+                # The user may have closed the owned tab already; that is the state we want.
+                if "No target with given id" not in str(error):
+                    raise
 
 
 def fingerprint(state):
@@ -190,5 +198,10 @@ def browser_operation(request):
         raise StalePage("Document is navigating")
     info["fingerprint"] = fingerprint(info)
     if request.get("screenshot", True):
-        info["screenshot"] = call("Page.captureScreenshot", format="jpeg", quality=72)["data"]
+        try:
+            # Chrome may not paint a background tab or minimized window; the preview is optional, so don't stall.
+            shot = cdp("Page.captureScreenshot", session_id=session, _response_timeout=2.0, format="jpeg", quality=72)
+            info["screenshot"] = shot["data"]
+        except TimeoutError:
+            info["screenshot"] = None
     return info
